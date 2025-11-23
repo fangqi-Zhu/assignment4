@@ -2,7 +2,7 @@ import torch
 import torch.nn  as nn
 import numpy as np
 import math
-# from simple_knn._C import distCUDA2  # 移除 CUDA 依赖
+from simple_knn._C import distCUDA2  # 恢复 CUDA 扩展导入
 from gaussian_splatting.utils.point_utils import PointCloud
 from gaussian_splatting.gauss_render import strip_symmetric, inverse_sigmoid, build_scaling_rotation
 from gaussian_splatting.utils.sh_utils import RGB2SH
@@ -38,7 +38,7 @@ class GSModel(nn.Module):
         self.setup_functions()
         self.debug = debug
 
-    def create_from_pcd(self, pcd:PointCloud, device='cpu'):  # 添加 device 参数，默认 CPU
+    def create_from_pcd(self, pcd:PointCloud, device='cuda'):  # 默认 cuda，匹配参考
         """
             create the guassian model from a color point cloud
         """
@@ -54,15 +54,10 @@ class GSModel(nn.Module):
         features[:, :3, 0 ] = fused_color
         features[:, 3:, 1:] = 0.0
 
+        # 使用 distCUDA2 计算每个点的最近邻距离平方，避免全距离矩阵
         points_tensor = torch.from_numpy(np.asarray(points)).float().to(device)
-        N = points_tensor.shape[0]
-        dist_matrix = torch.cdist(points_tensor, points_tensor)
-        # Mask self-distance to inf
-        mask = torch.eye(N, device=device).bool()
-        dist_matrix[mask] = float('inf')
-        min_dist2 = torch.min(dist_matrix, dim=1)[0]
-        dist2 = torch.clamp_min(min_dist2, 0.0000001)
-        scales = torch.log(torch.sqrt(dist2))[:, None].repeat(1, 3)
+        dist2 = torch.clamp_min(distCUDA2(points_tensor), 0.0000001)
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device=device)
         rots[:, 0] = 1
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device=device))

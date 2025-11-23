@@ -39,7 +39,6 @@ def build_rotation(r, device):
     return R
 
 
-
 def build_scaling_rotation(s, r, device):
     '''
     Args:
@@ -71,7 +70,6 @@ def strip_lowerdiag(L):
 
 def strip_symmetric(sym):
     return strip_lowerdiag(sym)
-
 
 
 def corvariance_3d(s, r, device):
@@ -122,33 +120,45 @@ def corvariance_2d(
     # Precompute tangent of half FOVs for frustum clipping in camera space and transform 3D Gaussian centers from world space to camera space.
     tan_fovx = math.tan(fov_x * 0.5)
     tan_fovy = math.tan(fov_y * 0.5)
-    mean_hom = homogeneous(mean3d)  # (N, 4)
-    t_hom = (viewmatrix @ mean_hom.T).T  # (N, 4)
-    t = t_hom[:, :3]  # (N, 3)
+    # Project 3D centers into camera space using row-vector convention
+    t_cam = homogeneous(mean3d) @ viewmatrix
+    t = t_cam[..., :3]
 
     # Truncate Gaussians far outside the frustum.
+    # We clip the normalized coordinates x/z, y/z, then re-scale by depth z.
     tx = (t[..., 0] / t[..., 2]).clip(min=-tan_fovx*1.3, max=tan_fovx*1.3) * t[..., 2]
     ty = (t[..., 1] / t[..., 2]).clip(min=-tan_fovy*1.3, max=tan_fovy*1.3) * t[..., 2]
     tz = t[..., 2]
 
-    W = viewmatrix[:3, :3]
+    # Build Jacobian J of perspective projection to pixel space
+    # Using truncated camera coords (tx, ty, tz)
+    eps = 1e-6
+    z = tz.clamp_min(eps)
+
+    # Ensure fx, fy are tensors/scalars on the right device
+    dtype = cov3d.dtype
+    fx = focal_x if isinstance(focal_x, torch.Tensor) else torch.tensor(float(focal_x), device=device, dtype=dtype)
+    fy = focal_y if isinstance(focal_y, torch.Tensor) else torch.tensor(float(focal_y), device=device, dtype=dtype)
+
     N = mean3d.shape[0]
-    cov_cam = torch.bmm(W.unsqueeze(0).expand(N, -1, -1), torch.bmm(cov3d, W.T.unsqueeze(0).expand(N, -1, -1)))
+    J = torch.zeros((N, 2, 3), device=device, dtype=dtype)
+    J[:, 0, 0] = fx / z
+    J[:, 0, 2] = -fx * tx / (z * z)
+    J[:, 1, 1] = fy / z
+    J[:, 1, 2] = -fy * ty / (z * z)
 
-    z = t[:, 2]
-    x = t[:, 0]
-    y = t[:, 1]
-    J = torch.zeros(N, 2, 3, device=device)
-    J[:, 0, 0] = focal_x / z
-    J[:, 1, 1] = focal_y / z
-    J[:, 0, 2] = -focal_x * x / z**2
-    J[:, 1, 2] = -focal_y * y / z**2
+    # Transform world covariance to camera coordinates: C_cam = R^T C_world R
+    # With row-vector convention, use W = R^T where R = viewmatrix[:3,:3]
+    W = viewmatrix[:3, :3].T
+    Wb = W[None, ...]
+    C_cam = torch.bmm(Wb.expand_as(cov3d), torch.bmm(cov3d, Wb.transpose(1, 2).expand_as(cov3d)))
 
-    tmp = torch.bmm(J, cov_cam)
-    cov2d = torch.bmm(tmp, J.transpose(1, 2))
+    # Project to 2D: cov2d = J C_cam J^T
+    JC = torch.bmm(J, C_cam)
+    cov2d = torch.bmm(JC, J.transpose(1, 2))
     
     # add low pass filter here according to E.q. 32 of EWQ splatting
-    filter = torch.eye(2,2, device=device) * 0.3
+    filter = torch.eye(2,2, device=device, dtype=dtype) * 0.3
     return cov2d + filter[None, :, :]
 
 
@@ -169,6 +179,7 @@ def get_radius(cov2d):
     lambda1 = mid + torch.sqrt((mid**2-det).clip(min=0.1))
     lambda2 = mid - torch.sqrt((mid**2-det).clip(min=0.1))
     return 3.0 * torch.sqrt(torch.max(lambda1, lambda2)).ceil()
+
 
 @torch.no_grad()
 def get_rect(pix_coord, radii, width, height):
@@ -235,7 +246,9 @@ class GaussRenderer(nn.Module):
         radii = get_radius(cov2d)
         rect_min, rect_max = get_rect(means2D, radii, width=camera.image_width, height=camera.image_height)
         
-        self.render_color = torch.zeros(camera.image_height, camera.image_width, 3, dtype=torch.float32, device=device)
+        # Initialize render buffers with background color
+        bkgd = 1.0 if self.white_bkgd else 0.0
+        self.render_color = torch.full((camera.image_height, camera.image_width, 3), bkgd, dtype=torch.float32, device=device)
         self.render_alpha = torch.zeros(camera.image_height, camera.image_width, 1, dtype=torch.float32, device=device)
 
         # 创建 pix_coord for this render
@@ -295,8 +308,14 @@ class GaussRenderer(nn.Module):
                 tile_color = torch.sum(weights * sorted_color.unsqueeze(0), dim=1)  # (B, 3)
                 tile_alpha = torch.sum(weights, dim=1)  # (B, 1)
         
+                # Composite with background
+                if self.white_bkgd:
+                    tile_final = tile_color + (1.0 - tile_alpha) * 1.0
+                else:
+                    tile_final = tile_color + (1.0 - tile_alpha) * 0.0  # tile_color
+        
                 # Store computed values into rendering buffers.
-                self.render_color[h:h_end, w:w_end] = tile_color.view(tile_h, tile_w, 3)
+                self.render_color[h:h_end, w:w_end] = tile_final.view(tile_h, tile_w, 3)
                 self.render_alpha[h:h_end, w:w_end] = tile_alpha.view(tile_h, tile_w, 1)
 
         return {
@@ -337,7 +356,9 @@ class GaussRenderer(nn.Module):
         mean_coord_y = ((mean_ndc[..., 1] + 1) * camera.image_height - 1.0) * 0.5
         means2D = torch.stack([mean_coord_x, mean_coord_y], dim=-1)
     
-        # filter with in_mask
+        # filter with in_mask to avoid invalid points
+        valid_mask = in_mask & (radii > 0)  # but radii not yet, wait, compute radii first? Or just in_mask
+        # For simplicity, filter with in_mask
         means2D = means2D[in_mask]
         cov2d = cov2d[in_mask]
         color = color[in_mask]
@@ -354,7 +375,5 @@ class GaussRenderer(nn.Module):
             device=device
         )
         
-        if self.white_bkgd:
-            rets["render"] = rets["render"] * rets["alpha"] + 1.0 * (1 - rets["alpha"])
-    
+        # No extra processing, background handled in render
         return rets

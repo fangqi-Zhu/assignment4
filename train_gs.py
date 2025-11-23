@@ -19,7 +19,7 @@ class GSSTrainer():
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.data = kwargs.get('data')
-        self.gaussRender = GaussRenderer(pixel_range=100, white_bkgd=True)  # 传入 white_bkgd
+        self.gaussRender = GaussRenderer(pixel_range=100, white_bkgd=True)  # Pass white_bkgd
         self.lambda_dssim = 0.2
         self.lambda_depth = 0.0
 
@@ -37,7 +37,7 @@ class GSSTrainer():
         return intrinsic
     def train(self, data_path, epochs=200, learning_rate=1e-3, use_ply=False, ply_path=None):
 
-        # 支持 CUDA、MPS 和 CPU
+        # Support CUDA, MPS, and CPU
         if torch.cuda.is_available():
             device = 'cuda'
         elif torch.backends.mps.is_available():
@@ -46,9 +46,9 @@ class GSSTrainer():
             device = 'cpu'
 
         # model definition
-        gaussModel = GSModel(sh_degree=4, debug=False).to(device)  # 移到 device
+        gaussModel = GSModel(sh_degree=4, debug=False).to(device)  # Move to device
 
-        # 根据 use_ply 参数决定是否使用 fetchPly
+        # Decide whether to use fetchPly based on use_ply parameter
         if use_ply and ply_path is not None:
             # load from ply file
             xyz, shs = fetchPly(ply_path)
@@ -69,7 +69,7 @@ class GSSTrainer():
         )
         pointcloud = PointCloud(xyz, channels)
         raw_points = pointcloud.random_sample(num_pts)
-        gaussModel.create_from_pcd(raw_points, device=device)  # 传入 device
+        gaussModel.create_from_pcd(raw_points, device=device)  # Pass device
 
         optimizer = torch.optim.Adam(gaussModel.parameters(), lr=learning_rate)
 
@@ -77,7 +77,7 @@ class GSSTrainer():
         dataset = NerfDataset(data_path)
         dataset_test = NerfDataset(data_path, split='test')
         
-        # 根据 use_ply 参数决定保存路径
+        # Decide output path based on use_ply parameter
         if use_ply:
             output_dir = 'output/3DGS_ply'
         else:
@@ -94,7 +94,7 @@ class GSSTrainer():
                 H, W = img.shape[:2]
                 intrinsics = self.get_intrinsic_torch(H, W, focal, device=device)
                 camera = Camera(width=W, height=H, intrinsic=intrinsics, c2w=pose)
-                out = self.gaussRender(camera=camera, pc=gaussModel, device=device)  # 传入 device
+                out = self.gaussRender(camera=camera, pc=gaussModel, device=device)  # Pass device
 
                 l1_loss = loss_utils.l1_loss(out['render'], img)
                 ssim_loss = 1.0-loss_utils.ssim(out['render'], img)
@@ -119,7 +119,7 @@ class GSSTrainer():
                     focal_test = focal_test.to(device)
                     intrinsics_test = self.get_intrinsic_torch(H, W, focal_test, device=device)
                     camera_test = Camera(width=W, height=H, intrinsic=intrinsics_test, c2w=pose_test)
-                    out_test = self.gaussRender(camera=camera_test, pc=gaussModel, device=device)  # 传入 device
+                    out_test = self.gaussRender(camera=camera_test, pc=gaussModel, device=device)  # Pass device
                     psnr_value_test += psnr(img_test.detach().cpu().numpy(), out_test['render'].detach().cpu().numpy(), data_range=1)
                     if i_test  == 29:
                         torchvision.utils.save_image(out_test['render'].reshape(H, W, 3).permute(2, 0, 1).unsqueeze(0), f'{output_dir}/pred_{epoch}.png')
@@ -146,9 +146,9 @@ if __name__ == '__main__':
         torch.cuda.manual_seed_all(seed)
     data_path = './data/lego' # data path
     
-    # 设置是否使用 PLY 文件
-    use_ply = False  # 设置为 True 以使用 PLY 文件
-    ply_path = 'data/lego/fused_light.ply'  # PLY 文件路径
+    # Set whether to use PLY file
+    use_ply = True  # Set to True to use PLY file
+    ply_path = 'data/lego/fused_light.ply'  # PLY file path
     
     trainer = GSSTrainer()
     trainer.train(data_path, use_ply=use_ply, ply_path=ply_path)

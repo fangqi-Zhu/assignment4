@@ -4,12 +4,17 @@ import math
 import numpy as np
 
 class Camera(nn.Module):
+    """
+    A simple camera class for rendering.
+    Handles intrinsics and extrinsics.
+    """
     def __init__(self, width, height, intrinsic, c2w, znear=0.1, zfar=100., trans=np.array([0.0, 0.0, 0.0]), scale=1.0):
         super(Camera, self).__init__()
         device = c2w.device
         self.znear = znear
         self.zfar = zfar
         self.focal_x, self.focal_y = intrinsic[0, 0], intrinsic[1, 1]
+        # Calculate field of view
         self.FoVx = focal2fov(self.focal_x, width)
         self.FoVy = focal2fov(self.focal_y, height)
         self.image_width = int(width)
@@ -17,20 +22,27 @@ class Camera(nn.Module):
         self.world_view_transform = torch.linalg.inv(c2w).permute(1,0)
         self.intrinsic = intrinsic
         self.c2w = c2w
+        # Build projection matrix
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).to(device)
         self.full_proj_transform = self.world_view_transform @ self.projection_matrix
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
 
 def fov2focal(fov, pixels):
+    """Convert FOV to focal length."""
     return pixels / (2 * math.tan(fov / 2))
 
 
 def focal2fov(focal, pixels):
+    """Convert focal length to FOV."""
     return 2*math.atan(pixels/(2*focal))
 
 
 def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
+    """
+    Get world to view matrix.
+    A bit messy but it works.
+    """
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = R.transpose()
     Rt[:3, 3] = t
@@ -45,6 +57,7 @@ def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
 
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
+    """Build the projection matrix for OpenGL style."""
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 

@@ -178,7 +178,7 @@ def random_select_rays(H, W, rays_o, rays_d, img, N_rand):
     select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)
     
     # Select the corresponding coordinates, rays, and image pixels
-    select_coords = coords[select_inds].long().to("cpu")  # (N_rand, 2)
+    select_coords = coords[select_inds].long() # (N_rand, 2)
     selected_rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     selected_rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     selected_img = img[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
@@ -187,10 +187,11 @@ def random_select_rays(H, W, rays_o, rays_d, img, N_rand):
     return selected_rays_o, selected_rays_d, selected_img
 
 
-def fit_images_and_calculate_psnr(data_path, epochs=200, learning_rate=5e-4):
+def fit_images_and_calculate_psnr(data_path, epochs=2000, learning_rate=5e-4):
     # get available device
-    device = 'mps' if torch.backends.mps.is_available() else 'cpu'  # 支持 macOS MPS 或 CPU
-
+    # device = 'mps' if torch.backends.mps.is_available() else 'cpu'  # 支持 macOS MPS 或 CPU
+    device = 'cuda' if torch.cuda.is_available()  else 'cpu'  # 支持 macOS MPS 或 CPU
+     
     # load data
     dataset = NerfDataset(data_path)
 

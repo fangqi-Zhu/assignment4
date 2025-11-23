@@ -35,21 +35,32 @@ class GSSTrainer():
         ], dtype=torch.float32, device=device)
         
         return intrinsic
-    def train(self, data_path, epochs=200, learning_rate=1e-3):
+    def train(self, data_path, epochs=200, learning_rate=1e-3, use_ply=False, ply_path=None):
 
-        device = 'mps' if torch.backends.mps.is_available() else 'cpu'  # 支持 macOS MPS 或 CPU
+        # 支持 CUDA、MPS 和 CPU
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
 
         # model definition
         gaussModel = GSModel(sh_degree=4, debug=False).to(device)  # 移到 device
 
-        # randomly generate some points
-        # you can adjust num_pts according to your GPU memory
-        # larger num_pts will give better quality but require more memory and time
-        num_pts = 2**14
-        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-        shs = np.random.random((num_pts, 3)) / 255.0
-        # or load from ply file
-        # xyz, shs = fetchPly('data/lego/fused_light.ply')
+        # 根据 use_ply 参数决定是否使用 fetchPly
+        if use_ply and ply_path is not None:
+            # load from ply file
+            xyz, shs = fetchPly(ply_path)
+            num_pts = len(xyz)
+            print(f"Loaded {num_pts} points from PLY file: {ply_path}")
+        else:
+            # randomly generate some points
+            # you can adjust num_pts according to your GPU memory
+            # larger num_pts will give better quality but require more memory and time
+            num_pts = 2**14
+            xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+            shs = np.random.random((num_pts, 3)) / 255.0
         
         channels = dict(
             R=shs[..., 0],
@@ -65,7 +76,13 @@ class GSSTrainer():
         # load data
         dataset = NerfDataset(data_path)
         dataset_test = NerfDataset(data_path, split='test')
-        os.makedirs('output/3DGS', exist_ok=True)
+        
+        # 根据 use_ply 参数决定保存路径
+        if use_ply:
+            output_dir = 'output/3DGS_ply'
+        else:
+            output_dir = 'output/3DGS'
+        os.makedirs(output_dir, exist_ok=True)
 
         for epoch in tqdm(range(epochs+1)):
             for i in tqdm(range(len(dataset)), desc=f"Training Epoch {epoch}"):
@@ -105,8 +122,8 @@ class GSSTrainer():
                     out_test = self.gaussRender(camera=camera_test, pc=gaussModel, device=device)  # 传入 device
                     psnr_value_test += psnr(img_test.detach().cpu().numpy(), out_test['render'].detach().cpu().numpy(), data_range=1)
                     if i_test  == 29:
-                        torchvision.utils.save_image(out_test['render'].reshape(H, W, 3).permute(2, 0, 1).unsqueeze(0), f'output/3DGS/pred_{epoch}.png')
-                        torchvision.utils.save_image(img_test.reshape(H, W, 3).permute(2, 0, 1).unsqueeze(0), f'output/3DGS/gt_{epoch}.png')
+                        torchvision.utils.save_image(out_test['render'].reshape(H, W, 3).permute(2, 0, 1).unsqueeze(0), f'{output_dir}/pred_{epoch}.png')
+                        torchvision.utils.save_image(img_test.reshape(H, W, 3).permute(2, 0, 1).unsqueeze(0), f'{output_dir}/gt_{epoch}.png')
 
                 print(f'Test PSNR for epoch {epoch}: {psnr_value_test/len(dataset_test):.2f}')
 
@@ -124,9 +141,14 @@ if __name__ == '__main__':
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
     data_path = './data/lego' # data path
     
+    # 设置是否使用 PLY 文件
+    use_ply = False  # 设置为 True 以使用 PLY 文件
+    ply_path = 'data/lego/fused_light.ply'  # PLY 文件路径
+    
     trainer = GSSTrainer()
-    trainer.train(data_path)
+    trainer.train(data_path, use_ply=use_ply, ply_path=ply_path)

@@ -58,7 +58,8 @@ def build_scaling_rotation(s, r, device):
 
 
 def strip_lowerdiag(L):
-    uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")
+    device = L.device
+    uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device=device)
     uncertainty[:, 0] = L[:, 0, 0]
     uncertainty[:, 1] = L[:, 0, 1]
     uncertainty[:, 2] = L[:, 0, 2]
